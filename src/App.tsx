@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
+import type { FormEvent } from "react";
+import { supabase } from "./lib/supabase";
 import {
   ArrowLeft, BookOpen, Check, ChevronDown, CircleDollarSign,
-  Compass, Gift, Home, Layers3, ListTodo, Plus, Sparkles, Trash2, X
+  Compass, Gift, Home, Layers3, ListTodo, LogOut, Plus, Sparkles, Trash2, X
 } from "lucide-react";
 
 type Screen = "home" | "capture" | "sort" | "plan" | "quests" | "logbook" | "rewards";
@@ -21,7 +23,9 @@ type AppState = {
   completedCount: number;
 };
 
-const STORAGE_KEY = "questbook-state-v1";
+const STORAGE_KEY = "dreamquests-state-v1";
+const LEGACY_STORAGE_KEY = "questbook-state-v1";
+const LOCAL_OWNER_KEY = "dreamquests-local-owner-v1";
 const MAX_ONGOING = 25;
 
 const initialState: AppState = { quests: [], tokens: 0, completedCount: 0 };
@@ -30,9 +34,8 @@ function makeId() {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
-function loadState(): AppState {
+function parseState(saved: string | null): AppState {
   try {
-    const saved = localStorage.getItem(STORAGE_KEY);
     if (!saved) return initialState;
     const parsed = JSON.parse(saved) as AppState;
     if (!Array.isArray(parsed.quests)) return initialState;
@@ -72,8 +75,58 @@ function EmptyState({ title, detail }: { title: string; detail: string }) {
   return <div className="empty-state"><div className="empty-orb"><Sparkles size={20} /></div><strong>{title}</strong><span>{detail}</span></div>;
 }
 
+type AuthMode = "login" | "signup";
+
+function AuthScreen({
+  mode, setMode, email, setEmail, password, setPassword, busy, error, message, onSubmit
+}: {
+  mode: AuthMode;
+  setMode: (mode: AuthMode) => void;
+  email: string;
+  setEmail: (value: string) => void;
+  password: string;
+  setPassword: (value: string) => void;
+  busy: boolean;
+  error: string;
+  message: string;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+}) {
+  return <div className="auth-page">
+    <div className="auth-card">
+      <div className="auth-logo"><Compass size={26} /></div>
+      <h1>DreamQuests</h1>
+      <p className="auth-intro">Your quests, safely saved and ready on every device.</p>
+      <div className="auth-tabs">
+        <button type="button" className={mode === "login" ? "active" : ""} onClick={() => setMode("login")}>Log in</button>
+        <button type="button" className={mode === "signup" ? "active" : ""} onClick={() => setMode("signup")}>Create account</button>
+      </div>
+      <form onSubmit={onSubmit} className="auth-form">
+        <label htmlFor="auth-email">Email</label>
+        <input id="auth-email" type="email" autoComplete="email" value={email} onChange={event => setEmail(event.target.value)} required placeholder="you@example.com" />
+        <label htmlFor="auth-password">Password</label>
+        <input id="auth-password" type="password" autoComplete={mode === "signup" ? "new-password" : "current-password"} value={password} onChange={event => setPassword(event.target.value)} required minLength={6} placeholder="At least 6 characters" />
+        {error && <p className="auth-error" role="alert">{error}</p>}
+        {message && <p className="auth-message" role="status">{message}</p>}
+        <button className="primary-button auth-submit" type="submit" disabled={busy}>{busy ? "Please wait…" : mode === "login" ? "Log in" : "Create account"}</button>
+      </form>
+      <p className="auth-privacy">Your game is stored in your own account. Other users cannot access it.</p>
+    </div>
+  </div>;
+}
+
 export default function App() {
-  const [data, setData] = useState<AppState>(loadState);
+  const [data, setData] = useState<AppState>(() => parseState(localStorage.getItem(STORAGE_KEY) ?? localStorage.getItem(LEGACY_STORAGE_KEY)));
+  const [user, setUser] = useState<{ id: string; email?: string } | null>(null);
+  const [authReady, setAuthReady] = useState(false);
+  const [loadedUserId, setLoadedUserId] = useState<string | null>(null);
+  const [gameLoadError, setGameLoadError] = useState("");
+  const [authMode, setAuthMode] = useState<AuthMode>("login");
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authBusy, setAuthBusy] = useState(false);
+  const [authError, setAuthError] = useState("");
+  const [authMessage, setAuthMessage] = useState("");
+  const [syncError, setSyncError] = useState("");
   const [screen, setScreen] = useState<Screen>("home");
   const [captureText, setCaptureText] = useState("");
   const [expanded, setExpanded] = useState<string[]>([]);
@@ -87,8 +140,107 @@ export default function App() {
   const [notice, setNotice] = useState("");
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-  }, [data]);
+    let alive = true;
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!alive) return;
+      setUser(session?.user ? { id: session.user.id, email: session.user.email } : null);
+      setAuthReady(true);
+    });
+    supabase.auth.getSession().then(({ data: sessionData, error }) => {
+      if (!alive) return;
+      if (error) setAuthError(error.message);
+      setUser(sessionData.session?.user ? { id: sessionData.session.user.id, email: sessionData.session.user.email } : null);
+      setAuthReady(true);
+    });
+    return () => { alive = false; listener.subscription.unsubscribe(); };
+  }, []);
+
+  useEffect(() => {
+    if (!authReady || !user) {
+      setLoadedUserId(null);
+      setGameLoadError("");
+      return;
+    }
+    let cancelled = false;
+    setLoadedUserId(null);
+    setGameLoadError("");
+    (async () => {
+      const { data: savedRow, error } = await supabase
+        .from("game_saves")
+        .select("game_state")
+        .eq("user_id", user.id)
+        .maybeSingle();
+      if (cancelled) return;
+      if (error) {
+        setGameLoadError(`Couldn't load your saved game: ${error.message}`);
+        return;
+      }
+
+      let loadedState: AppState;
+      if (savedRow?.game_state) {
+        loadedState = parseState(JSON.stringify(savedRow.game_state));
+      } else {
+        const ownerId = localStorage.getItem(LOCAL_OWNER_KEY);
+        const userLocalSave = localStorage.getItem(`${STORAGE_KEY}:${user.id}`);
+        const legacySave = localStorage.getItem(STORAGE_KEY) ?? localStorage.getItem(LEGACY_STORAGE_KEY);
+        const mayImportLegacy = !ownerId || ownerId === user.id;
+        loadedState = userLocalSave
+          ? parseState(userLocalSave)
+          : mayImportLegacy ? parseState(legacySave) : initialState;
+      }
+      if (cancelled) return;
+      setData(loadedState);
+      localStorage.setItem(LOCAL_OWNER_KEY, user.id);
+      localStorage.setItem(`${STORAGE_KEY}:${user.id}`, JSON.stringify(loadedState));
+      setLoadedUserId(user.id);
+    })();
+    return () => { cancelled = true; };
+  }, [authReady, user?.id]);
+
+  useEffect(() => {
+    if (!user || loadedUserId !== user.id) return;
+    const serialized = JSON.stringify(data);
+    localStorage.setItem(`${STORAGE_KEY}:${user.id}`, serialized);
+    localStorage.setItem(LOCAL_OWNER_KEY, user.id);
+    const timeout = window.setTimeout(async () => {
+      const { error } = await supabase.from("game_saves").upsert({
+        user_id: user.id,
+        game_state: data,
+        updated_at: new Date().toISOString()
+      }, { onConflict: "user_id" });
+      if (error) setSyncError(`Cloud save failed: ${error.message}`);
+      else setSyncError("");
+    }, 600);
+    return () => window.clearTimeout(timeout);
+  }, [data, user?.id, loadedUserId]);
+
+  async function submitAuth(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setAuthBusy(true);
+    setAuthError("");
+    setAuthMessage("");
+    try {
+      if (authMode === "signup") {
+        const { data: result, error } = await supabase.auth.signUp({ email: authEmail.trim(), password: authPassword });
+        if (error) throw error;
+        if (!result.session) setAuthMessage("Account created. Check your email to confirm your account, then log in.");
+        else setAuthMessage("Account created successfully.");
+      } else {
+        const { error } = await supabase.auth.signInWithPassword({ email: authEmail.trim(), password: authPassword });
+        if (error) throw error;
+      }
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : "Authentication failed. Please try again.");
+    } finally {
+      setAuthBusy(false);
+    }
+  }
+
+  async function signOut() {
+    await supabase.auth.signOut();
+    setLoadedUserId(null);
+    setScreen("home");
+  }
 
   const quests = data.quests;
   const inPool = (pool: Pool) => quests.filter(q => q.pool === pool);
@@ -278,6 +430,12 @@ export default function App() {
     setSlotIndex(null);
   }
 
+  if (!authReady) return <div className="auth-page"><div className="auth-card"><div className="auth-logo"><Compass size={26} /></div><h1>DreamQuests</h1><p className="auth-intro">Connecting to your account…</p></div></div>;
+
+  if (!user) return <AuthScreen mode={authMode} setMode={mode => { setAuthMode(mode); setAuthError(""); setAuthMessage(""); }} email={authEmail} setEmail={setAuthEmail} password={authPassword} setPassword={setAuthPassword} busy={authBusy} error={authError} message={authMessage} onSubmit={submitAuth} />;
+
+  if (loadedUserId !== user.id) return <div className="auth-page"><div className="auth-card"><div className="auth-logo"><Compass size={26} /></div><h1>DreamQuests</h1><p className="auth-intro">{gameLoadError || "Loading your saved quests…"}</p>{gameLoadError && <button className="primary-button auth-submit" onClick={() => window.location.reload()}>Try again</button>}<button className="auth-text-button" onClick={signOut}>Log out</button></div></div>;
+
   return (
     <div className="app-shell">
       <div className="phone-frame">
@@ -286,7 +444,7 @@ export default function App() {
             <header className="home-header">
               <div className="brand-mark"><Compass size={23} /></div>
               <div className="brand-copy"><h1>DreamQuests<span>.</span></h1></div>
-              <div className="token-pill"><CircleDollarSign size={17} /><strong>{data.tokens}</strong></div>
+              <div className="home-header-actions"><div className="token-pill"><CircleDollarSign size={17} /><strong>{data.tokens}</strong></div><button className="signout-button" onClick={signOut} aria-label="Log out" title={user.email ?? "Log out"}><LogOut size={17} /></button></div>
             </header>
             <div className="section-heading"><div><h2>Your quest board</h2></div></div>
             <div className="home-grid">
@@ -370,6 +528,7 @@ export default function App() {
               {rewardPool.length === 0 ? <EmptyState title="Dream up a reward" detail="Capture something you'd love to do, then sort it into Reward." /> : <div className="quest-stack">{rewardPool.map(q => <div className="reward-store-card" key={q.id}><div className="reward-store-icon"><Gift size={21} /></div><div className="reward-store-copy"><strong>{q.title}</strong><span>Unlock for 50 tokens</span></div><button className="unlock-button" onClick={() => unlockReward(q)} disabled={data.tokens < 50}><CircleDollarSign size={15} /> 50</button></div>)}</div>}
               {notice && <div className="inline-notice">{notice}</div>}
             </section>}
+            {syncError && <div className="sync-error" role="status">{syncError}</div>}
             <footer className="screen-footer"><span>DREAMQUESTS</span><span>Made for your next small step ✦</span></footer>
           </main>
         )}

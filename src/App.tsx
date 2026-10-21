@@ -80,8 +80,8 @@ export default function App() {
   const [draggedId, setDraggedId] = useState<string | null>(null);
   const [planProjectId, setPlanProjectId] = useState<string | null>(null);
   const [nextActionText, setNextActionText] = useState("");
-  const [followUpText, setFollowUpText] = useState("");
-  const [followUpParentId, setFollowUpParentId] = useState("");
+  const [followUpInputs, setFollowUpInputs] = useState<Record<string, string>>({});
+  const [completingIds, setCompletingIds] = useState<string[]>([]);
   const [activeModal, setActiveModal] = useState<"plan" | "slot" | null>(null);
   const [slotIndex, setSlotIndex] = useState<number | null>(null);
   const [notice, setNotice] = useState("");
@@ -118,10 +118,20 @@ export default function App() {
   }
 
   function deleteQuest(id: string) {
-    setData(prev => ({
-      ...prev,
-      quests: prev.quests.filter(q => q.id !== id && q.dependsOn !== id)
-    }));
+    setData(prev => {
+      const removeIds = new Set<string>([id]);
+      let changed = true;
+      while (changed) {
+        changed = false;
+        prev.quests.forEach(q => {
+          if (q.dependsOn && removeIds.has(q.dependsOn) && !removeIds.has(q.id)) {
+            removeIds.add(q.id);
+            changed = true;
+          }
+        });
+      }
+      return { ...prev, quests: prev.quests.filter(q => !removeIds.has(q.id)) };
+    });
   }
 
   function capture() {
@@ -152,28 +162,47 @@ export default function App() {
   }
 
   function completeQuest(quest: Quest) {
-    const followUps = locked.filter(q => q.dependsOn === quest.id);
-    setData(prev => {
-      let nextQuests = prev.quests.filter(q => q.id !== quest.id);
-      if (followUps.length > 0) {
-        const followIds = new Set(followUps.map(q => q.id));
-        nextQuests = nextQuests.map(q => followIds.has(q.id) ? { ...q, pool: "ongoing", dependsOn: undefined } : q);
-      }
-      return { ...prev, quests: nextQuests, tokens: prev.tokens + 1, completedCount: prev.completedCount + 1 };
-    });
-    setNotice(followUps.length ? `Quest complete! +1 token. ${followUps.length} follow-up quest${followUps.length > 1 ? "s" : ""} unlocked.` : "Quest complete! +1 token.");
-    window.setTimeout(() => setNotice(""), 2800);
+    if (completingIds.includes(quest.id)) return;
+    setCompletingIds(prev => [...prev, quest.id]);
+    window.setTimeout(() => {
+      setData(prev => {
+        const followUps = prev.quests
+          .filter(q => q.pool === "locked" && q.dependsOn === quest.id)
+          .map(q => ({ ...q, pool: "ongoing" as Pool, dependsOn: undefined }));
+        const followUpIds = new Set(followUps.map(q => q.id));
+        const nextQuests: Quest[] = [];
+        prev.quests.forEach(q => {
+          if (q.id === quest.id) nextQuests.push(...followUps);
+          else if (!followUpIds.has(q.id)) nextQuests.push(q);
+        });
+        return {
+          ...prev,
+          quests: nextQuests.filter(q => q.id !== quest.id),
+          tokens: prev.tokens + 1,
+          completedCount: prev.completedCount + 1
+        };
+      });
+      setCompletingIds(prev => prev.filter(id => id !== quest.id));
+      const count = data.quests.filter(q => q.pool === "locked" && q.dependsOn === quest.id).length;
+      setNotice(count ? `Quest complete! +1 token. ${count} follow-up quest${count > 1 ? "s" : ""} unlocked.` : "Quest complete! +1 token.");
+      window.setTimeout(() => setNotice(""), 2800);
+    }, 420);
   }
 
   function completeReward(quest: Quest) {
-    setData(prev => ({
-      ...prev,
-      quests: prev.quests.filter(q => q.id !== quest.id),
-      tokens: prev.tokens + 1,
-      completedCount: prev.completedCount + 1
-    }));
-    setNotice("Reward quest complete! +1 token.");
-    window.setTimeout(() => setNotice(""), 2200);
+    if (completingIds.includes(quest.id)) return;
+    setCompletingIds(prev => [...prev, quest.id]);
+    window.setTimeout(() => {
+      setData(prev => ({
+        ...prev,
+        quests: prev.quests.filter(q => q.id !== quest.id),
+        tokens: prev.tokens + 1,
+        completedCount: prev.completedCount + 1
+      }));
+      setCompletingIds(prev => prev.filter(id => id !== quest.id));
+      setNotice("Reward quest complete! +1 token.");
+      window.setTimeout(() => setNotice(""), 2200);
+    }, 420);
   }
 
   function unlockReward(quest: Quest) {
@@ -194,8 +223,7 @@ export default function App() {
   function openPlan(project: Quest) {
     setPlanProjectId(project.id);
     setNextActionText("");
-    setFollowUpText("");
-    setFollowUpParentId("");
+    setFollowUpInputs({});
     setActiveModal("plan");
   }
 
@@ -205,10 +233,36 @@ export default function App() {
     setNextActionText("");
   }
 
-  function addFollowUp() {
-    if (!projectBeingPlanned || !followUpText.trim() || !followUpParentId) return;
-    addQuest(followUpText, "locked", { dependsOn: followUpParentId, projectId: projectBeingPlanned.id });
-    setFollowUpText("");
+  function addFollowUp(parentId: string) {
+    const text = (followUpInputs[parentId] ?? "").trim();
+    if (!projectBeingPlanned || !text) return;
+    addQuest(text, "locked", { dependsOn: parentId, projectId: projectBeingPlanned.id });
+    setFollowUpInputs(prev => ({ ...prev, [parentId]: "" }));
+  }
+
+  function finishPlanning() {
+    if (planProjectId) {
+      setData(prev => ({ ...prev, quests: prev.quests.filter(q => q.id !== planProjectId) }));
+    }
+    setActiveModal(null);
+    setPlanProjectId(null);
+  }
+
+  function renderPlanNode(quest: Quest, depth = 0): React.ReactNode {
+    const children = quests.filter(q => q.projectId === projectBeingPlanned?.id && q.dependsOn === quest.id && q.pool === "locked").sort((a, b) => a.createdAt - b.createdAt);
+    return <div className="plan-tree-node" key={quest.id} style={{ marginLeft: depth ? 15 : 0 }}>
+      {depth > 0 && <span className="plan-tree-arrow" aria-hidden="true">↳</span>}
+      <div className={`mini-quest ${quest.pool === "locked" ? "locked-mini" : ""}`}>
+        <span className={`quest-dot ${quest.pool === "locked" ? "muted-dot" : "blue-dot"}`} />
+        <span>{quest.title}</span>
+        <button className="mini-delete" onClick={() => deleteQuest(quest.id)} aria-label={`Delete ${quest.title}`}><X size={14} /></button>
+      </div>
+      <div className="followup-inline-form">
+        <input value={followUpInputs[quest.id] ?? ""} onChange={e => setFollowUpInputs(prev => ({ ...prev, [quest.id]: e.target.value }))} onKeyDown={e => { if (e.key === "Enter") addFollowUp(quest.id); }} placeholder="Add follow-up quest…" aria-label={`Add follow-up to ${quest.title}`} />
+        <button className="primary-button square-button" onClick={() => addFollowUp(quest.id)} disabled={!(followUpInputs[quest.id] ?? "").trim()} aria-label={`Add follow-up to ${quest.title}`}><Plus size={16} /></button>
+      </div>
+      {children.map(child => renderPlanNode(child, depth + 1))}
+    </div>;
   }
 
   function selectSlot(index: number) {
@@ -227,50 +281,37 @@ export default function App() {
   return (
     <div className="app-shell">
       <div className="phone-frame">
-        <div className="status-bar"><span>9:41</span><span className="status-right"><span className="signal">▮▮▮</span><span>Wi-Fi</span><span className="battery"><i /></span></span></div>
         {screen === "home" ? (
           <main className="screen home-screen">
             <header className="home-header">
               <div className="brand-mark"><Compass size={23} /></div>
-              <div className="brand-copy"><span className="eyebrow">YOUR PERSONAL ADVENTURE</span><h1>Questbook<span>.</span></h1></div>
+              <div className="brand-copy"><h1>DreamQuests<span>.</span></h1></div>
               <div className="token-pill"><CircleDollarSign size={17} /><strong>{data.tokens}</strong></div>
             </header>
-            <Card className="welcome-card">
-              <div className="welcome-text"><span className="eyebrow light">READY WHEN YOU ARE</span><h2>Small steps.<br />Epic progress.</h2><p>One quest at a time.</p></div>
-              <div className="welcome-art"><div className="art-sun" /><div className="art-mountain one" /><div className="art-mountain two" /><div className="art-path" /><Sparkles className="art-star" size={18} /></div>
-            </Card>
-            <div className="section-heading"><div><span className="eyebrow">THE ADVENTURE STARTS HERE</span><h2>Your quest board</h2></div><span className="small-muted">6 tools</span></div>
+            <div className="section-heading"><div><h2>Your quest board</h2></div></div>
             <div className="home-grid">
               {navItems.map(item => {
                 const Icon = item.icon;
-                const count = item.id === "capture" ? inbox.length : item.id === "sort" ? inbox.length : item.id === "plan" ? projects.length : item.id === "quests" ? active.length : item.id === "logbook" ? ongoing.length + rewardOngoing.length : rewardPool.length;
+                const count = item.id === "capture" ? inbox.length : item.id === "sort" ? inbox.length + projects.length : item.id === "plan" ? projects.length : item.id === "quests" ? active.length : item.id === "logbook" ? ongoing.length + rewardOngoing.length : rewardPool.length;
                 return <button className="home-tile" key={item.id} onClick={() => setScreen(item.id)}>
-                  <span className={`tile-icon ${item.color}`}><Icon size={23} strokeWidth={1.9} /></span>
-                  <span className="tile-label">{item.label}</span><span className="tile-description">{item.description}</span>
-                  <span className="tile-count">{count} {count === 1 ? "item" : "items"} <span>↗</span></span>
+                  <span className={`tile-icon-wrap ${item.color}`}><span className="tile-icon"><Icon size={23} strokeWidth={1.9} /></span>{count > 0 && <span className="notification-badge">{count}</span>}</span>
+                  <span className="tile-label">{item.label}</span>
                 </button>;
               })}
             </div>
-            <Card className="progress-card">
-              <div className="progress-icon"><Sparkles size={18} /></div>
-              <div className="progress-copy"><strong>Your journey so far</strong><span>{data.completedCount} quests completed</span></div>
-              <div className="progress-tokens"><CircleDollarSign size={16} /> {data.tokens}</div>
-            </Card>
-            <p className="home-footnote">Your life, one little quest at a time.</p>
           </main>
         ) : (
           <main className="screen sub-screen">
             <header className="screen-header">
               <button className="back-button" onClick={() => { setScreen("home"); setActiveModal(null); }} aria-label="Back to home"><ArrowLeft size={20} /></button>
-              <div className="screen-heading-copy"><span className="eyebrow">QUESTBOOK / {screen.toUpperCase()}</span><h1>{screenInfo[screen].title}</h1><p>{screenInfo[screen].subtitle}</p></div>
+              <div className="screen-heading-copy"><h1>{screenInfo[screen].title}</h1></div>
               <div className="header-token"><CircleDollarSign size={15} /> {data.tokens}</div>
             </header>
 
             {screen === "capture" && <section className="content-section">
               <Card className="capture-card">
-                <label htmlFor="capture-input" className="field-label">WHAT'S ON YOUR MIND?</label>
                 <textarea id="capture-input" value={captureText} onChange={e => setCaptureText(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) capture(); }} placeholder="A task, an idea, a reminder, a someday plan…" rows={4} />
-                <div className="form-footer"><span className="helper-text">No sorting needed yet. Just capture it.</span><button className="primary-button" onClick={capture} disabled={!captureText.trim()}><Plus size={17} /> Capture</button></div>
+                <div className="form-footer"><span></span><button className="primary-button" onClick={capture} disabled={!captureText.trim()}><Plus size={17} /> Capture</button></div>
               </Card>
               {notice && <div className="inline-notice">{notice}</div>}
               <div className="section-heading compact"><div><span className="eyebrow">YOUR INBOX</span><h2>Waiting to be sorted <span className="count-bubble">{inbox.length}</span></h2></div></div>
@@ -304,17 +345,22 @@ export default function App() {
                 const isExpanded = expanded.includes(q.id);
                 return <div className="quest-group" key={q.id}><div className="quest-card"><span className="quest-dot blue-dot" /><span className="quest-title">{q.title}</span>{children.length > 0 && <button className={`expand-button ${isExpanded ? "open" : ""}`} onClick={() => setExpanded(prev => isExpanded ? prev.filter(id => id !== q.id) : [...prev, q.id])} aria-label="Show follow-up quests"><ChevronDown size={18} /></button>}<button className="add-button" onClick={() => addToLogbook(q)} disabled={ordinarySlotsLeft === 0} title="Add to logbook"><Plus size={18} /></button></div>{isExpanded && children.map(child => <div className="locked-card" key={child.id}><span className="lock-symbol">⌑</span><span>{child.title}</span><small>Locked</small></div>)}</div>;
               })}</div>}
-              <div className="section-heading compact extra-heading"><div><span className="eyebrow">NOT READY YET</span><h2>Locked follow-ups <span className="count-bubble">{locked.length}</span></h2></div></div>
-              {locked.length > 0 ? <p className="helper-paragraph">Follow-ups unlock automatically when their preceding quest is completed in the logbook.</p> : <p className="helper-paragraph">No locked quests. Add follow-ups from the Plan screen.</p>}
               {notice && <div className="inline-notice">{notice}</div>}
             </section>}
 
             {screen === "logbook" && <section className="content-section">
               <Card className="logbook-summary"><div className="summary-stat"><span className="eyebrow">IN PROGRESS</span><strong>{ongoing.length + rewardOngoing.length}</strong><small>quests in your book</small></div><div className="summary-divider" /><div className="summary-stat"><span className="eyebrow">COMPLETED</span><strong>{data.completedCount}</strong><small>quests conquered</small></div></Card>
               <div className="section-heading compact"><div><span className="eyebrow">YOUR CURRENT ADVENTURES</span><h2>Ongoing quests</h2></div><span className="small-muted">{ongoing.length}/{MAX_ONGOING} slots</span></div>
-              {ongoing.length === 0 ? <EmptyState title="Your next chapter awaits" detail="Add an active quest from Quest list, or fill an empty slot below." /> : <div className="quest-stack">{ongoing.map(q => <div className="logbook-quest" key={q.id}><span className="completion-ring" /><span className="quest-title">{q.title}</span><button className="complete-button" onClick={() => completeQuest(q)} aria-label={`Complete ${q.title}`}><Check size={18} /></button></div>)}</div>}
-              {Array.from({ length: Math.max(0, Math.min(3, ordinarySlotsLeft)) }, (_, i) => i).length > 0 && <div className="empty-slots"><div className="slots-label">EMPTY SLOTS <span>{ordinarySlotsLeft} available</span></div><div className="slot-grid">{Array.from({ length: Math.min(3, ordinarySlotsLeft) }, (_, i) => <button className="empty-slot" key={i} onClick={() => selectSlot(i)}><Plus size={18} /><span>Choose a quest</span></button>)}</div>{ordinarySlotsLeft > 3 && <p className="helper-text">Showing 3 of {ordinarySlotsLeft} available slots.</p>}</div>}
-              {rewardOngoing.length > 0 && <><div className="section-heading compact reward-heading"><div><span className="eyebrow">BONUS ADVENTURES</span><h2>Reward quests <span className="count-bubble gold-count">{rewardOngoing.length}</span></h2></div></div><div className="quest-stack">{rewardOngoing.map(q => <div className="logbook-quest reward-quest" key={q.id}><span className="completion-ring gold-ring" /><span className="quest-title">{q.title}</span><span className="reward-tag">REWARD</span><button className="complete-button reward-complete" onClick={() => completeReward(q)} aria-label={`Complete reward ${q.title}`}><Check size={18} /></button></div>)}</div></>}
+              {ongoing.length === 0 ? <EmptyState title="Your next chapter awaits" detail="Add an active quest from Quest list, or fill an empty slot below." /> : <div className="quest-stack">{ongoing.map(q => {
+                const children = locked.filter(child => child.dependsOn === q.id);
+                const completing = completingIds.includes(q.id);
+                return <div className={`logbook-quest-group ${completing ? "is-completing" : ""}`} key={q.id}>
+                  <div className={`logbook-quest ${completing ? "quest-completing" : ""}`}><span className="completion-ring" /><span className="quest-title">{q.title}</span><button className="complete-button" onClick={() => completeQuest(q)} disabled={completing} aria-label={`Complete ${q.title}`}><Check size={18} /><span className="completion-stars" aria-hidden="true">✦ ✧</span></button></div>
+                  {children.map(child => <div className={`logbook-followup ${completing ? "followup-promoting" : ""}`} key={child.id}><span>↳</span>{child.title}</div>)}
+                </div>;
+              })}</div>}
+              {ordinarySlotsLeft > 0 && <div className="empty-slots"><div className="slots-label">EMPTY SLOTS <span>{ordinarySlotsLeft} available</span></div><div className="slot-grid">{Array.from({ length: ordinarySlotsLeft }, (_, i) => <button className="empty-slot" key={i} onClick={() => selectSlot(i)}><Plus size={17} /><span>Choose a quest</span></button>)}</div></div>}
+              {rewardOngoing.length > 0 && <><div className="section-heading compact reward-heading"><div><span className="eyebrow">BONUS ADVENTURES</span><h2>Reward quests <span className="count-bubble gold-count">{rewardOngoing.length}</span></h2></div></div><div className="quest-stack">{rewardOngoing.map(q => { const completing = completingIds.includes(q.id); return <div className={`logbook-quest reward-quest ${completing ? "quest-completing" : ""}`} key={q.id}><span className="completion-ring gold-ring" /><span className="quest-title">{q.title}</span><span className="reward-tag">REWARD</span><button className="complete-button reward-complete" onClick={() => completeReward(q)} disabled={completing} aria-label={`Complete reward ${q.title}`}><Check size={18} /><span className="completion-stars" aria-hidden="true">✦ ✧</span></button></div>; })}</div></>}
               {notice && <div className="inline-notice">{notice}</div>}
             </section>}
 
@@ -323,31 +369,26 @@ export default function App() {
               <div className="section-heading compact"><div><span className="eyebrow">SAVE UP & UNLOCK</span><h2>Reward quests <span className="count-bubble gold-count">{rewardPool.length}</span></h2></div></div>
               {rewardPool.length === 0 ? <EmptyState title="Dream up a reward" detail="Capture something you'd love to do, then sort it into Reward." /> : <div className="quest-stack">{rewardPool.map(q => <div className="reward-store-card" key={q.id}><div className="reward-store-icon"><Gift size={21} /></div><div className="reward-store-copy"><strong>{q.title}</strong><span>Unlock for 50 tokens</span></div><button className="unlock-button" onClick={() => unlockReward(q)} disabled={data.tokens < 50}><CircleDollarSign size={15} /> 50</button></div>)}</div>}
               {notice && <div className="inline-notice">{notice}</div>}
-              <p className="helper-paragraph reward-note">Unlocked rewards appear in a gold slot in your Logbook. They don't use up your 25 regular quest slots, and completing one earns a token back.</p>
             </section>}
-            <footer className="screen-footer"><span>QUESTBOOK</span><span>Made for your next small step ✦</span></footer>
+            <footer className="screen-footer"><span>DREAMQUESTS</span><span>Made for your next small step ✦</span></footer>
           </main>
         )}
         <nav className="bottom-nav" aria-label="Main navigation">
           <button className={screen === "home" ? "selected" : ""} onClick={() => setScreen("home")}><Home size={19} /><span>Home</span></button>
           <button className={screen === "capture" ? "selected" : ""} onClick={() => setScreen("capture")}><Sparkles size={19} /><span>Capture</span></button>
-          <button className={screen === "quests" ? "selected" : ""} onClick={() => setScreen("quests")}><ListTodo size={19} /><span>Quests</span></button>
+          <button className={screen === "sort" ? "selected" : ""} onClick={() => setScreen("sort")}><Layers3 size={19} /><span>Sort</span>{inbox.length + projects.length > 0 && <span className="nav-badge">{inbox.length + projects.length}</span>}</button>
           <button className={screen === "logbook" ? "selected" : ""} onClick={() => setScreen("logbook")}><BookOpen size={19} /><span>Logbook</span></button>
         </nav>
-        <div className="home-indicator"><span /></div>
 
         {activeModal === "plan" && projectBeingPlanned && <div className="modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) setActiveModal(null); }}>
           <div className="modal-sheet plan-modal">
             <div className="modal-handle" /><div className="modal-top"><div><span className="eyebrow">PROJECT PLANNING</span><h2>{projectBeingPlanned.title}</h2></div><button className="icon-button" onClick={() => setActiveModal(null)} aria-label="Close"><X size={20} /></button></div>
             <div className="modal-scroll">
-              <div className="modal-section"><h3><span className="number-badge">1</span> Next actions</h3><p>What can you physically do next? Add as many as you need.</p><div className="inline-form"><input value={nextActionText} onChange={e => setNextActionText(e.target.value)} onKeyDown={e => e.key === "Enter" && addNextAction()} placeholder="e.g. Find three venues" /><button className="primary-button square-button" onClick={addNextAction} disabled={!nextActionText.trim()}><Plus size={18} /></button></div>
-                {quests.filter(q => q.projectId === projectBeingPlanned.id && q.pool === "active").length > 0 && <div className="modal-quest-list">{quests.filter(q => q.projectId === projectBeingPlanned.id && q.pool === "active").map(q => <div className="mini-quest" key={q.id}><span className="quest-dot blue-dot" />{q.title}<button className="mini-delete" onClick={() => deleteQuest(q.id)}><X size={14} /></button></div>)}</div>}
-              </div>
-              <div className="modal-section"><h3><span className="number-badge">2</span> Follow-up quests</h3><p>These stay locked until their preceding quest is completed.</p><label className="field-label" htmlFor="parent-select">UNLOCKS AFTER</label><select id="parent-select" value={followUpParentId} onChange={e => setFollowUpParentId(e.target.value)}><option value="">Choose a next action…</option>{quests.filter(q => q.projectId === projectBeingPlanned.id && q.pool === "active").map(q => <option key={q.id} value={q.id}>{q.title}</option>)}</select><div className="inline-form"><input value={followUpText} onChange={e => setFollowUpText(e.target.value)} onKeyDown={e => e.key === "Enter" && addFollowUp()} placeholder="e.g. Book the venue" /><button className="primary-button square-button" onClick={addFollowUp} disabled={!followUpText.trim() || !followUpParentId}><Plus size={18} /></button></div>
-                {quests.filter(q => q.projectId === projectBeingPlanned.id && q.pool === "locked").length > 0 && <div className="modal-quest-list">{quests.filter(q => q.projectId === projectBeingPlanned.id && q.pool === "locked").map(q => <div className="mini-quest locked-mini" key={q.id}><span className="lock-symbol">⌑</span><span>{q.title}</span><small>After: {quests.find(p => p.id === q.dependsOn)?.title ?? "previous quest"}</small><button className="mini-delete" onClick={() => deleteQuest(q.id)}><X size={14} /></button></div>)}</div>}
+              <div className="modal-section"><h3>Next actions</h3><div className="inline-form"><input value={nextActionText} onChange={e => setNextActionText(e.target.value)} onKeyDown={e => e.key === "Enter" && addNextAction()} placeholder="Add a next action…" /><button className="primary-button square-button" onClick={addNextAction} disabled={!nextActionText.trim()}><Plus size={18} /></button></div>
+                <div className="plan-tree">{quests.filter(q => q.projectId === projectBeingPlanned.id && q.pool === "active" && !q.dependsOn).sort((a, b) => a.createdAt - b.createdAt).map(q => renderPlanNode(q))}</div>
               </div>
             </div>
-            <button className="primary-button modal-done" onClick={() => setActiveModal(null)}>Done planning <Check size={17} /></button>
+            <button className="primary-button modal-done" onClick={finishPlanning}>Done planning <Check size={17} /></button>
           </div>
         </div>}
 

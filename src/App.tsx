@@ -2,11 +2,11 @@ import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import { supabase } from "./lib/supabase";
 import {
-  ArrowLeft, BookOpen, Check, ChevronDown, CircleDollarSign,
-  Compass, Gift, Home, Layers3, ListTodo, LogOut, Plus, Sparkles, Trash2, X
+  ArrowDownToLine, ArrowLeft, BookOpen, Check, ChevronDown, CircleDollarSign,
+  Compass, Gift, Home, ListTodo, LogOut, MoreVertical, Pencil, Plus, Sparkles, Trash2, X
 } from "lucide-react";
 
-type Screen = "home" | "capture" | "sort" | "plan" | "quests" | "logbook" | "rewards";
+type Screen = "home" | "capture" | "plan" | "quests" | "logbook" | "rewards";
 type Pool = "inbox" | "active" | "projects" | "rewards" | "locked" | "ongoing" | "rewardOngoing";
 type Quest = {
   id: string;
@@ -50,8 +50,7 @@ function parseState(saved: string | null): AppState {
 }
 
 const screenInfo: Record<Exclude<Screen, "home">, { title: string; subtitle: string }> = {
-  capture: { title: "Capture", subtitle: "Get it out of your head." },
-  sort: { title: "Sort", subtitle: "Give each thought a place." },
+  capture: { title: "Capture & Sort", subtitle: "Capture thoughts, then give each one a place." },
   plan: { title: "Plan", subtitle: "Turn projects into next actions." },
   quests: { title: "Quest list", subtitle: "Choose what deserves a slot." },
   logbook: { title: "Logbook", subtitle: "Your active adventures." },
@@ -59,8 +58,7 @@ const screenInfo: Record<Exclude<Screen, "home">, { title: string; subtitle: str
 };
 
 const navItems: { id: Exclude<Screen, "home">; label: string; icon: typeof Sparkles; color: string; description: string }[] = [
-  { id: "capture", label: "Capture", icon: Sparkles, color: "lavender", description: "Collect ideas and reminders" },
-  { id: "sort", label: "Sort", icon: Layers3, color: "blue", description: "Tidy up your quest pool" },
+  { id: "capture", label: "Capture & Sort", icon: Sparkles, color: "lavender", description: "Capture and organize your thoughts" },
   { id: "plan", label: "Plan", icon: Compass, color: "mint", description: "Break projects into actions" },
   { id: "quests", label: "Quest list", icon: ListTodo, color: "peach", description: "Pick your next quests" },
   { id: "logbook", label: "Logbook", icon: BookOpen, color: "gold", description: "Work on ongoing quests" },
@@ -102,9 +100,9 @@ function AuthScreen({
       </div>
       <form onSubmit={onSubmit} className="auth-form">
         <label htmlFor="auth-email">Email</label>
-        <input id="auth-email" type="email" autoComplete="email" value={email} onChange={event => setEmail(event.target.value)} required placeholder="you@example.com" />
+        <input id="auth-email" style={{ fontSize: 16 }} type="email" autoComplete="email" value={email} onChange={event => setEmail(event.target.value)} required placeholder="you@example.com" />
         <label htmlFor="auth-password">Password</label>
-        <input id="auth-password" type="password" autoComplete={mode === "signup" ? "new-password" : "current-password"} value={password} onChange={event => setPassword(event.target.value)} required minLength={6} placeholder="At least 6 characters" />
+        <input id="auth-password" style={{ fontSize: 16 }} type="password" autoComplete={mode === "signup" ? "new-password" : "current-password"} value={password} onChange={event => setPassword(event.target.value)} required minLength={6} placeholder="At least 6 characters" />
         {error && <p className="auth-error" role="alert">{error}</p>}
         {message && <p className="auth-message" role="status">{message}</p>}
         <button className="primary-button auth-submit" type="submit" disabled={busy}>{busy ? "Please wait…" : mode === "login" ? "Log in" : "Create account"}</button>
@@ -276,7 +274,11 @@ export default function App() {
       while (changed) {
         changed = false;
         prev.quests.forEach(q => {
-          if (q.dependsOn && removeIds.has(q.dependsOn) && !removeIds.has(q.id)) {
+          const belongsToDeletedProject = [...removeIds].some(parentId => {
+            const parent = prev.quests.find(item => item.id === parentId);
+            return parent?.pool === "projects" && q.projectId === parentId;
+          });
+          if (((q.dependsOn && removeIds.has(q.dependsOn)) || belongsToDeletedProject) && !removeIds.has(q.id)) {
             removeIds.add(q.id);
             changed = true;
           }
@@ -381,14 +383,14 @@ export default function App() {
 
   function addNextAction() {
     if (!projectBeingPlanned || !nextActionText.trim()) return;
-    addQuest(nextActionText, "active", { projectId: projectBeingPlanned.id });
+    addQuest(`[${projectBeingPlanned.title}] ${nextActionText.trim()}`, "active", { projectId: projectBeingPlanned.id });
     setNextActionText("");
   }
 
   function addFollowUp(parentId: string) {
     const text = (followUpInputs[parentId] ?? "").trim();
     if (!projectBeingPlanned || !text) return;
-    addQuest(text, "locked", { dependsOn: parentId, projectId: projectBeingPlanned.id });
+    addQuest(`[${projectBeingPlanned.title}] ${text}`, "locked", { dependsOn: parentId, projectId: projectBeingPlanned.id });
     setFollowUpInputs(prev => ({ ...prev, [parentId]: "" }));
   }
 
@@ -406,11 +408,10 @@ export default function App() {
       {depth > 0 && <span className="plan-tree-arrow" aria-hidden="true">↳</span>}
       <div className={`mini-quest ${quest.pool === "locked" ? "locked-mini" : ""}`}>
         <span className={`quest-dot ${quest.pool === "locked" ? "muted-dot" : "blue-dot"}`} />
-        <span>{quest.title}</span>
-        <button className="mini-delete" onClick={() => deleteQuest(quest.id)} aria-label={`Delete ${quest.title}`}><X size={14} /></button>
+        <QuestTitle quest={quest} onSave={title => updateQuest(quest.id, { title })} onDelete={deleteQuest} />
       </div>
       <div className="followup-inline-form">
-        <input value={followUpInputs[quest.id] ?? ""} onChange={e => setFollowUpInputs(prev => ({ ...prev, [quest.id]: e.target.value }))} onKeyDown={e => { if (e.key === "Enter") addFollowUp(quest.id); }} placeholder="Add follow-up quest…" aria-label={`Add follow-up to ${quest.title}`} />
+        <input style={{ fontSize: 16 }} value={followUpInputs[quest.id] ?? ""} onChange={e => setFollowUpInputs(prev => ({ ...prev, [quest.id]: e.target.value }))} onKeyDown={e => { if (e.key === "Enter") addFollowUp(quest.id); }} placeholder="Add follow-up quest…" aria-label={`Add follow-up to ${quest.title}`} />
         <button className="primary-button square-button" onClick={() => addFollowUp(quest.id)} disabled={!(followUpInputs[quest.id] ?? "").trim()} aria-label={`Add follow-up to ${quest.title}`}><Plus size={16} /></button>
       </div>
       {children.map(child => renderPlanNode(child, depth + 1))}
@@ -450,7 +451,7 @@ export default function App() {
             <div className="home-grid">
               {navItems.map(item => {
                 const Icon = item.icon;
-                const count = item.id === "capture" ? inbox.length : item.id === "sort" ? inbox.length + projects.length : item.id === "plan" ? projects.length : item.id === "quests" ? active.length : item.id === "logbook" ? ongoing.length + rewardOngoing.length : rewardPool.length;
+                const count = item.id === "capture" ? inbox.length : item.id === "plan" ? projects.length : item.id === "quests" ? active.length : item.id === "logbook" ? ongoing.length + rewardOngoing.length : rewardPool.length;
                 return <button className="home-tile" key={item.id} onClick={() => setScreen(item.id)}>
                   <span className={`tile-icon-wrap ${item.color}`}><span className="tile-icon"><Icon size={23} strokeWidth={1.9} /></span>{count > 0 && <span className="notification-badge">{count}</span>}</span>
                   <span className="tile-label">{item.label}</span>
@@ -468,31 +469,27 @@ export default function App() {
 
             {screen === "capture" && <section className="content-section">
               <Card className="capture-card">
-                <textarea id="capture-input" value={captureText} onChange={e => setCaptureText(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) capture(); }} placeholder="A task, an idea, a reminder, a someday plan…" rows={4} />
+                <textarea id="capture-input" style={{ fontSize: 16 }} value={captureText} onChange={e => setCaptureText(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) capture(); }} placeholder="A task, an idea, a reminder, a someday plan…" rows={4} />
                 <div className="form-footer"><span></span><button className="primary-button" onClick={capture} disabled={!captureText.trim()}><Plus size={17} /> Capture</button></div>
               </Card>
               {notice && <div className="inline-notice">{notice}</div>}
-              <div className="section-heading compact"><div><span className="eyebrow">YOUR INBOX</span><h2>Waiting to be sorted <span className="count-bubble">{inbox.length}</span></h2></div></div>
-              {inbox.length === 0 ? <EmptyState title="A clear head feels good" detail="Captured thoughts will show up here." /> : <div className="quest-stack">{inbox.map(q => <QuestCard key={q.id} quest={q} onDelete={deleteQuest} />)}</div>}
-            </section>}
-
-            {screen === "sort" && <section className="content-section">
-              <div className="section-heading compact"><div><span className="eyebrow">STEP 1 OF 2</span><h2>Unsorted thoughts <span className="count-bubble">{inbox.length}</span></h2></div><span className="small-muted">Drag a card ↓</span></div>
-              {inbox.length === 0 ? <EmptyState title="Inbox zero!" detail="Capture something new or enjoy the breathing room." /> :
-                <div className="quest-stack">{inbox.map(q => <div key={q.id} draggable onClick={() => setDraggedId(q.id)} onDragStart={() => setDraggedId(q.id)} onDragEnd={() => setDraggedId(null)} className={`quest-card draggable ${draggedId === q.id ? "dragging" : ""}`}><span className="drag-grip">⠿</span><span className="quest-title">{q.title}</span><button className="icon-button danger" onClick={() => deleteQuest(q.id)} aria-label="Delete quest"><Trash2 size={16} /></button></div>)}</div>}
-              <div className="section-heading compact bucket-title"><div><span className="eyebrow">STEP 2 OF 2</span><h2>Drop into a bucket</h2></div></div>
+              <div className="section-heading compact"><div><span className="eyebrow">YOUR INBOX</span><h2>Waiting to be sorted <span className="count-bubble">{inbox.length}</span></h2></div><span className="small-muted">Drag a card ↓</span></div>
+              {inbox.length === 0 ? <EmptyState title="A clear head feels good" detail="Captured thoughts will show up here." /> :
+                <div className="quest-stack">{inbox.map(q => <div key={q.id} draggable onClick={() => setDraggedId(q.id)} onDragStart={() => setDraggedId(q.id)} onDragEnd={() => setDraggedId(null)} className={`quest-card draggable ${draggedId === q.id ? "dragging" : ""}`}>
+                  <span className="drag-grip">⠿</span><QuestTitle quest={q} onSave={title => updateQuest(q.id, { title })} onDelete={deleteQuest} />
+                </div>)}</div>}
+              <div className="section-heading compact bucket-title"><div><span className="eyebrow">SORT YOUR THOUGHTS</span><h2>Drop into a bucket</h2></div></div>
               <div className="bucket-grid">
                 <DropBucket title="Action" description="Do it soon" color="blue" icon={<ListTodo size={21} />} count={active.length} onDrop={() => handleDrop("active")} onClick={() => draggedId && handleDrop("active")} />
                 <DropBucket title="Project" description="Needs a plan" color="mint" icon={<Compass size={21} />} count={projects.length} onDrop={() => handleDrop("projects")} onClick={() => draggedId && handleDrop("projects")} />
                 <DropBucket title="Reward" description="Worth saving for" color="gold" icon={<Gift size={21} />} count={rewardPool.length} onDrop={() => handleDrop("rewards")} onClick={() => draggedId && handleDrop("rewards")} />
               </div>
               <p className="helper-text center">On a touch screen, tap a quest then tap a bucket.</p>
-              {notice && <div className="inline-notice">{notice}</div>}
             </section>}
 
             {screen === "plan" && <section className="content-section">
               <div className="section-heading compact"><div><span className="eyebrow">PROJECT WORKSHOP</span><h2>Projects to plan <span className="count-bubble">{projects.length}</span></h2></div></div>
-              {projects.length === 0 ? <EmptyState title="Nothing on the drawing board" detail="Sort an item into Project to plan it here." /> : <div className="quest-stack">{projects.map(q => <button className="project-card" key={q.id} onClick={() => openPlan(q)}><span className="project-icon"><Compass size={19} /></span><span className="project-copy"><strong>{q.title}</strong><small>{quests.filter(x => x.projectId === q.id && x.pool === "active").length} next actions · {quests.filter(x => x.projectId === q.id && x.pool === "locked").length} locked follow-ups</small></span><span className="chevron">›</span></button>)}</div>}
+              {projects.length === 0 ? <EmptyState title="Nothing on the drawing board" detail="Sort an item into Project to plan it here." /> : <div className="quest-stack">{projects.map(q => <div className="project-card" key={q.id}><span className="project-icon"><Compass size={19} /></span><div className="project-copy"><QuestTitle quest={q} onSave={title => updateQuest(q.id, { title })} onDelete={deleteQuest} /><small>{quests.filter(x => x.projectId === q.id && x.pool === "active").length} next actions · {quests.filter(x => x.projectId === q.id && x.pool === "locked").length} locked follow-ups</small><button className="primary-button" onClick={() => openPlan(q)}>Open plan</button></div></div>)}</div>}
             </section>}
 
             {screen === "quests" && <section className="content-section">
@@ -501,7 +498,7 @@ export default function App() {
               {active.length === 0 ? <EmptyState title="No active quests yet" detail="Capture and sort a thought, or plan a project." /> : <div className="quest-stack">{active.map(q => {
                 const children = locked.filter(l => l.dependsOn === q.id);
                 const isExpanded = expanded.includes(q.id);
-                return <div className="quest-group" key={q.id}><div className="quest-card"><span className="quest-dot blue-dot" /><span className="quest-title">{q.title}</span>{children.length > 0 && <button className={`expand-button ${isExpanded ? "open" : ""}`} onClick={() => setExpanded(prev => isExpanded ? prev.filter(id => id !== q.id) : [...prev, q.id])} aria-label="Show follow-up quests"><ChevronDown size={18} /></button>}<button className="add-button" onClick={() => addToLogbook(q)} disabled={ordinarySlotsLeft === 0} title="Add to logbook"><Plus size={18} /></button></div>{isExpanded && children.map(child => <div className="locked-card" key={child.id}><span className="lock-symbol">⌑</span><span>{child.title}</span><small>Locked</small></div>)}</div>;
+                return <div className="quest-group" key={q.id}><div className="quest-card"><span className="quest-dot blue-dot" /><QuestTitle quest={q} onSave={title => updateQuest(q.id, { title })} onDelete={deleteQuest} />{children.length > 0 && <button className={`expand-button ${isExpanded ? "open" : ""}`} onClick={() => setExpanded(prev => isExpanded ? prev.filter(id => id !== q.id) : [...prev, q.id])} aria-label="Show follow-up quests"><ChevronDown size={18} /></button>}<button className="add-button" onClick={() => addToLogbook(q)} disabled={ordinarySlotsLeft === 0} title="Add to logbook"><Plus size={18} /></button></div>{isExpanded && children.map(child => <div className="locked-card" key={child.id}><span className="lock-symbol">⌑</span><QuestTitle quest={child} onSave={title => updateQuest(child.id, { title })} onDelete={deleteQuest} /><small>Locked</small></div>)}</div>;
               })}</div>}
               {notice && <div className="inline-notice">{notice}</div>}
             </section>}
@@ -513,19 +510,19 @@ export default function App() {
                 const children = locked.filter(child => child.dependsOn === q.id);
                 const completing = completingIds.includes(q.id);
                 return <div className={`logbook-quest-group ${completing ? "is-completing" : ""}`} key={q.id}>
-                  <div className={`logbook-quest ${completing ? "quest-completing" : ""}`}><span className="completion-ring" /><span className="quest-title">{q.title}</span><button className="complete-button" onClick={() => completeQuest(q)} disabled={completing} aria-label={`Complete ${q.title}`}><Check size={18} /><span className="completion-stars" aria-hidden="true">✦ ✧</span></button></div>
-                  {children.map(child => <div className={`logbook-followup ${completing ? "followup-promoting" : ""}`} key={child.id}><span>↳</span>{child.title}</div>)}
+                  <div className={`logbook-quest ${completing ? "quest-completing" : ""}`}><QuestTitle quest={q} onSave={title => updateQuest(q.id, { title })} onDelete={deleteQuest} onMoveToPool={() => moveToPool(q.id, "active")} /><button className="complete-button" onClick={() => completeQuest(q)} disabled={completing} aria-label={`Complete ${q.title}`}><Check size={18} /><span className="completion-stars" aria-hidden="true">✦ ✧</span></button></div>
+                  {children.map(child => <div className={`logbook-followup ${completing ? "followup-promoting" : ""}`} key={child.id}><span>↳</span><QuestTitle quest={child} onSave={title => updateQuest(child.id, { title })} onDelete={deleteQuest} /></div>)}
                 </div>;
               })}</div>}
               {ordinarySlotsLeft > 0 && <div className="empty-slots"><div className="slots-label">EMPTY SLOTS <span>{ordinarySlotsLeft} available</span></div><div className="slot-grid">{Array.from({ length: ordinarySlotsLeft }, (_, i) => <button className="empty-slot" key={i} onClick={() => selectSlot(i)}><Plus size={17} /><span>Choose a quest</span></button>)}</div></div>}
-              {rewardOngoing.length > 0 && <><div className="section-heading compact reward-heading"><div><span className="eyebrow">BONUS ADVENTURES</span><h2>Reward quests <span className="count-bubble gold-count">{rewardOngoing.length}</span></h2></div></div><div className="quest-stack">{rewardOngoing.map(q => { const completing = completingIds.includes(q.id); return <div className={`logbook-quest reward-quest ${completing ? "quest-completing" : ""}`} key={q.id}><span className="completion-ring gold-ring" /><span className="quest-title">{q.title}</span><span className="reward-tag">REWARD</span><button className="complete-button reward-complete" onClick={() => completeReward(q)} disabled={completing} aria-label={`Complete reward ${q.title}`}><Check size={18} /><span className="completion-stars" aria-hidden="true">✦ ✧</span></button></div>; })}</div></>}
+              {rewardOngoing.length > 0 && <><div className="section-heading compact reward-heading"><div><span className="eyebrow">BONUS ADVENTURES</span><h2>Reward quests <span className="count-bubble gold-count">{rewardOngoing.length}</span></h2></div></div><div className="quest-stack">{rewardOngoing.map(q => { const completing = completingIds.includes(q.id); return <div className={`logbook-quest reward-quest ${completing ? "quest-completing" : ""}`} key={q.id}><QuestTitle quest={q} onSave={title => updateQuest(q.id, { title })} onDelete={deleteQuest} onMoveToPool={() => updateQuest(q.id, { pool: "rewards", isReward: false })} /><span className="reward-tag">REWARD</span><button className="complete-button reward-complete" onClick={() => completeReward(q)} disabled={completing} aria-label={`Complete reward ${q.title}`}><Check size={18} /><span className="completion-stars" aria-hidden="true">✦ ✧</span></button></div>; })}</div></>}
               {notice && <div className="inline-notice">{notice}</div>}
             </section>}
 
             {screen === "rewards" && <section className="content-section">
               <Card className="token-banner"><div className="token-coin"><CircleDollarSign size={30} /></div><div><span className="eyebrow light">YOUR TOKEN WALLET</span><strong>{data.tokens} <small>tokens</small></strong><p>Every completed quest earns 1 token.</p></div><div className="banner-sparkle"><Sparkles size={24} /></div></Card>
               <div className="section-heading compact"><div><span className="eyebrow">SAVE UP & UNLOCK</span><h2>Reward quests <span className="count-bubble gold-count">{rewardPool.length}</span></h2></div></div>
-              {rewardPool.length === 0 ? <EmptyState title="Dream up a reward" detail="Capture something you'd love to do, then sort it into Reward." /> : <div className="quest-stack">{rewardPool.map(q => <div className="reward-store-card" key={q.id}><div className="reward-store-icon"><Gift size={21} /></div><div className="reward-store-copy"><strong>{q.title}</strong><span>Unlock for 50 tokens</span></div><button className="unlock-button" onClick={() => unlockReward(q)} disabled={data.tokens < 50}><CircleDollarSign size={15} /> 50</button></div>)}</div>}
+              {rewardPool.length === 0 ? <EmptyState title="Dream up a reward" detail="Capture something you'd love to do, then sort it into Reward." /> : <div className="quest-stack">{rewardPool.map(q => <div className="reward-store-card" key={q.id}><div className="reward-store-icon"><Gift size={21} /></div><div className="reward-store-copy"><QuestTitle quest={q} onSave={title => updateQuest(q.id, { title })} onDelete={deleteQuest} /><span>Unlock for 50 tokens</span></div><button className="unlock-button" onClick={() => unlockReward(q)} disabled={data.tokens < 50}><CircleDollarSign size={15} /> 50</button></div>)}</div>}
               {notice && <div className="inline-notice">{notice}</div>}
             </section>}
             {syncError && <div className="sync-error" role="status">{syncError}</div>}
@@ -534,8 +531,8 @@ export default function App() {
         )}
         <nav className="bottom-nav" aria-label="Main navigation">
           <button className={screen === "home" ? "selected" : ""} onClick={() => setScreen("home")}><Home size={19} /><span>Home</span></button>
-          <button className={screen === "capture" ? "selected" : ""} onClick={() => setScreen("capture")}><Sparkles size={19} /><span>Capture</span></button>
-          <button className={screen === "sort" ? "selected" : ""} onClick={() => setScreen("sort")}><Layers3 size={19} /><span>Sort</span>{inbox.length + projects.length > 0 && <span className="nav-badge">{inbox.length + projects.length}</span>}</button>
+          <button className={screen === "capture" ? "selected" : ""} onClick={() => setScreen("capture")}><Sparkles size={19} /><span>Capture &amp; Sort</span>{inbox.length > 0 && <span className="nav-badge">{inbox.length}</span>}</button>
+          <button className={screen === "plan" ? "selected" : ""} onClick={() => setScreen("plan")}><Compass size={19} /><span>Plan</span>{projects.length > 0 && <span className="nav-badge">{projects.length}</span>}</button>
           <button className={screen === "logbook" ? "selected" : ""} onClick={() => setScreen("logbook")}><BookOpen size={19} /><span>Logbook</span></button>
         </nav>
 
@@ -543,7 +540,7 @@ export default function App() {
           <div className="modal-sheet plan-modal">
             <div className="modal-handle" /><div className="modal-top"><div><span className="eyebrow">PROJECT PLANNING</span><h2>{projectBeingPlanned.title}</h2></div><button className="icon-button" onClick={() => setActiveModal(null)} aria-label="Close"><X size={20} /></button></div>
             <div className="modal-scroll">
-              <div className="modal-section"><h3>Next actions</h3><div className="inline-form"><input value={nextActionText} onChange={e => setNextActionText(e.target.value)} onKeyDown={e => e.key === "Enter" && addNextAction()} placeholder="Add a next action…" /><button className="primary-button square-button" onClick={addNextAction} disabled={!nextActionText.trim()}><Plus size={18} /></button></div>
+              <div className="modal-section"><h3>Next actions</h3><div className="inline-form"><input style={{ fontSize: 16 }} value={nextActionText} onChange={e => setNextActionText(e.target.value)} onKeyDown={e => e.key === "Enter" && addNextAction()} placeholder="Add a next action…" /><button className="primary-button square-button" onClick={addNextAction} disabled={!nextActionText.trim()}><Plus size={18} /></button></div>
                 <div className="plan-tree">{quests.filter(q => q.projectId === projectBeingPlanned.id && q.pool === "active" && !q.dependsOn).sort((a, b) => a.createdAt - b.createdAt).map(q => renderPlanNode(q))}</div>
               </div>
             </div>
@@ -561,8 +558,39 @@ export default function App() {
   );
 }
 
-function QuestCard({ quest, onDelete }: { quest: Quest; onDelete: (id: string) => void }) {
-  return <div className="quest-card"><span className="quest-dot lavender-dot" /><span className="quest-title">{quest.title}</span><button className="icon-button danger" onClick={() => onDelete(quest.id)} aria-label="Delete quest"><Trash2 size={16} /></button></div>;
+function QuestTitle({ quest, onSave, onDelete, onMoveToPool }: {
+  quest: Quest;
+  onSave: (title: string) => void;
+  onDelete: (id: string) => void;
+  onMoveToPool?: () => void;
+}) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(quest.title);
+
+  function saveTitle() {
+    const title = draft.trim();
+    if (title) onSave(title);
+    else setDraft(quest.title);
+    setEditing(false);
+    setMenuOpen(false);
+  }
+
+  return <div className="quest-title-tools" style={{ display: "flex", alignItems: "center", gap: 6, flex: 1, minWidth: 0, position: "relative" }}>
+    {editing ? <>
+      <input autoFocus onClick={event => event.stopPropagation()} style={{ minWidth: 0, flex: 1, fontSize: 16 }} value={draft} onChange={event => setDraft(event.target.value)} onKeyDown={event => { if (event.key === "Enter") saveTitle(); if (event.key === "Escape") { setDraft(quest.title); setEditing(false); } }} aria-label={`Edit ${quest.title}`} />
+      <button className="icon-button" onClick={event => { event.stopPropagation(); saveTitle(); }} aria-label="Save title"><Check size={16} /></button>
+      <button className="icon-button" onClick={event => { event.stopPropagation(); setDraft(quest.title); setEditing(false); }} aria-label="Cancel editing"><X size={16} /></button>
+    </> : <>
+      <span className="quest-title" style={{ flex: 1, minWidth: 0 }}>{quest.title}</span>
+      <button className="icon-button" onClick={event => { event.stopPropagation(); setMenuOpen(open => !open); }} aria-label={`More options for ${quest.title}`} aria-expanded={menuOpen}><MoreVertical size={18} /></button>
+      {menuOpen && <div className="quest-actions-menu" onClick={event => event.stopPropagation()} style={{ position: "absolute", zIndex: 20, right: 0, top: "100%", minWidth: 150, padding: 6, background: "white", borderRadius: 10, boxShadow: "0 5px 20px rgba(0,0,0,.16)", display: "grid", gap: 3 }}>
+        <button className="menu-action" style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "9px 10px", border: 0, borderRadius: 7, background: "transparent", textAlign: "left", fontSize: 13 }} onClick={() => { setDraft(quest.title); setEditing(true); setMenuOpen(false); }}><Pencil size={14} /> Edit title</button>
+        {onMoveToPool && <button className="menu-action" style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "9px 10px", border: 0, borderRadius: 7, background: "transparent", textAlign: "left", fontSize: 13 }} onClick={() => { onMoveToPool(); setMenuOpen(false); }}><ArrowDownToLine size={14} /> Move to pool</button>}
+        <button className="menu-action danger" style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "9px 10px", border: 0, borderRadius: 7, background: "transparent", textAlign: "left", fontSize: 13, color: "#b42318" }} onClick={() => { onDelete(quest.id); setMenuOpen(false); }}><Trash2 size={14} /> Delete</button>
+      </div>}
+    </>}
+  </div>;
 }
 
 function DropBucket({ title, description, color, icon, count, onDrop, onClick }: { title: string; description: string; color: string; icon: React.ReactNode; count: number; onDrop: () => void; onClick: () => void }) {

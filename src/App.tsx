@@ -1,12 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import type { FormEvent } from "react";
-import { supabase } from "./lib/supabase";
 import {
   ArrowLeft, BookOpen, Check, ChevronDown, CircleDollarSign,
-  Compass, Gift, Home, Layers3, ListTodo, LogOut, Plus, Sparkles, Trash2, X
+  Compass, Gift, Home, ListTodo, Plus, Sparkles, Trash2, X, MoreVertical, ArrowDownToLine
 } from "lucide-react";
 
-type Screen = "home" | "capture" | "sort" | "plan" | "quests" | "logbook" | "rewards";
+type Screen = "home" | "capture" | "plan" | "quests" | "logbook" | "rewards";
 type Pool = "inbox" | "active" | "projects" | "rewards" | "locked" | "ongoing" | "rewardOngoing";
 type Quest = {
   id: string;
@@ -23,9 +21,7 @@ type AppState = {
   completedCount: number;
 };
 
-const STORAGE_KEY = "dreamquests-state-v1";
-const LEGACY_STORAGE_KEY = "questbook-state-v1";
-const LOCAL_OWNER_KEY = "dreamquests-local-owner-v1";
+const STORAGE_KEY = "questbook-state-v1";
 const MAX_ONGOING = 25;
 
 const initialState: AppState = { quests: [], tokens: 0, completedCount: 0 };
@@ -34,8 +30,9 @@ function makeId() {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
-function parseState(saved: string | null): AppState {
+function loadState(): AppState {
   try {
+    const saved = localStorage.getItem(STORAGE_KEY);
     if (!saved) return initialState;
     const parsed = JSON.parse(saved) as AppState;
     if (!Array.isArray(parsed.quests)) return initialState;
@@ -50,8 +47,7 @@ function parseState(saved: string | null): AppState {
 }
 
 const screenInfo: Record<Exclude<Screen, "home">, { title: string; subtitle: string }> = {
-  capture: { title: "Capture", subtitle: "Get it out of your head." },
-  sort: { title: "Sort", subtitle: "Give each thought a place." },
+  capture: { title: "Capture & Sort", subtitle: "Capture thoughts and give them a place." },
   plan: { title: "Plan", subtitle: "Turn projects into next actions." },
   quests: { title: "Quest list", subtitle: "Choose what deserves a slot." },
   logbook: { title: "Logbook", subtitle: "Your active adventures." },
@@ -59,8 +55,7 @@ const screenInfo: Record<Exclude<Screen, "home">, { title: string; subtitle: str
 };
 
 const navItems: { id: Exclude<Screen, "home">; label: string; icon: typeof Sparkles; color: string; description: string }[] = [
-  { id: "capture", label: "Capture", icon: Sparkles, color: "lavender", description: "Collect ideas and reminders" },
-  { id: "sort", label: "Sort", icon: Layers3, color: "blue", description: "Tidy up your quest pool" },
+  { id: "capture", label: "Capture & Sort", icon: Sparkles, color: "lavender", description: "Collect and sort your thoughts" },
   { id: "plan", label: "Plan", icon: Compass, color: "mint", description: "Break projects into actions" },
   { id: "quests", label: "Quest list", icon: ListTodo, color: "peach", description: "Pick your next quests" },
   { id: "logbook", label: "Logbook", icon: BookOpen, color: "gold", description: "Work on ongoing quests" },
@@ -75,58 +70,8 @@ function EmptyState({ title, detail }: { title: string; detail: string }) {
   return <div className="empty-state"><div className="empty-orb"><Sparkles size={20} /></div><strong>{title}</strong><span>{detail}</span></div>;
 }
 
-type AuthMode = "login" | "signup";
-
-function AuthScreen({
-  mode, setMode, email, setEmail, password, setPassword, busy, error, message, onSubmit
-}: {
-  mode: AuthMode;
-  setMode: (mode: AuthMode) => void;
-  email: string;
-  setEmail: (value: string) => void;
-  password: string;
-  setPassword: (value: string) => void;
-  busy: boolean;
-  error: string;
-  message: string;
-  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
-}) {
-  return <div className="auth-page">
-    <div className="auth-card">
-      <div className="auth-logo"><Compass size={26} /></div>
-      <h1>DreamQuests</h1>
-      <p className="auth-intro">Your quests, safely saved and ready on every device.</p>
-      <div className="auth-tabs">
-        <button type="button" className={mode === "login" ? "active" : ""} onClick={() => setMode("login")}>Log in</button>
-        <button type="button" className={mode === "signup" ? "active" : ""} onClick={() => setMode("signup")}>Create account</button>
-      </div>
-      <form onSubmit={onSubmit} className="auth-form">
-        <label htmlFor="auth-email">Email</label>
-        <input id="auth-email" type="email" autoComplete="email" value={email} onChange={event => setEmail(event.target.value)} required placeholder="you@example.com" />
-        <label htmlFor="auth-password">Password</label>
-        <input id="auth-password" type="password" autoComplete={mode === "signup" ? "new-password" : "current-password"} value={password} onChange={event => setPassword(event.target.value)} required minLength={6} placeholder="At least 6 characters" />
-        {error && <p className="auth-error" role="alert">{error}</p>}
-        {message && <p className="auth-message" role="status">{message}</p>}
-        <button className="primary-button auth-submit" type="submit" disabled={busy}>{busy ? "Please wait…" : mode === "login" ? "Log in" : "Create account"}</button>
-      </form>
-      <p className="auth-privacy">Your game is stored in your own account. Other users cannot access it.</p>
-    </div>
-  </div>;
-}
-
 export default function App() {
-  const [data, setData] = useState<AppState>(() => parseState(localStorage.getItem(STORAGE_KEY) ?? localStorage.getItem(LEGACY_STORAGE_KEY)));
-  const [user, setUser] = useState<{ id: string; email?: string } | null>(null);
-  const [authReady, setAuthReady] = useState(false);
-  const [loadedUserId, setLoadedUserId] = useState<string | null>(null);
-  const [gameLoadError, setGameLoadError] = useState("");
-  const [authMode, setAuthMode] = useState<AuthMode>("login");
-  const [authEmail, setAuthEmail] = useState("");
-  const [authPassword, setAuthPassword] = useState("");
-  const [authBusy, setAuthBusy] = useState(false);
-  const [authError, setAuthError] = useState("");
-  const [authMessage, setAuthMessage] = useState("");
-  const [syncError, setSyncError] = useState("");
+  const [data, setData] = useState<AppState>(loadState);
   const [screen, setScreen] = useState<Screen>("home");
   const [captureText, setCaptureText] = useState("");
   const [expanded, setExpanded] = useState<string[]>([]);
@@ -140,107 +85,8 @@ export default function App() {
   const [notice, setNotice] = useState("");
 
   useEffect(() => {
-    let alive = true;
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (!alive) return;
-      setUser(session?.user ? { id: session.user.id, email: session.user.email } : null);
-      setAuthReady(true);
-    });
-    supabase.auth.getSession().then(({ data: sessionData, error }) => {
-      if (!alive) return;
-      if (error) setAuthError(error.message);
-      setUser(sessionData.session?.user ? { id: sessionData.session.user.id, email: sessionData.session.user.email } : null);
-      setAuthReady(true);
-    });
-    return () => { alive = false; listener.subscription.unsubscribe(); };
-  }, []);
-
-  useEffect(() => {
-    if (!authReady || !user) {
-      setLoadedUserId(null);
-      setGameLoadError("");
-      return;
-    }
-    let cancelled = false;
-    setLoadedUserId(null);
-    setGameLoadError("");
-    (async () => {
-      const { data: savedRow, error } = await supabase
-        .from("game_saves")
-        .select("game_state")
-        .eq("user_id", user.id)
-        .maybeSingle();
-      if (cancelled) return;
-      if (error) {
-        setGameLoadError(`Couldn't load your saved game: ${error.message}`);
-        return;
-      }
-
-      let loadedState: AppState;
-      if (savedRow?.game_state) {
-        loadedState = parseState(JSON.stringify(savedRow.game_state));
-      } else {
-        const ownerId = localStorage.getItem(LOCAL_OWNER_KEY);
-        const userLocalSave = localStorage.getItem(`${STORAGE_KEY}:${user.id}`);
-        const legacySave = localStorage.getItem(STORAGE_KEY) ?? localStorage.getItem(LEGACY_STORAGE_KEY);
-        const mayImportLegacy = !ownerId || ownerId === user.id;
-        loadedState = userLocalSave
-          ? parseState(userLocalSave)
-          : mayImportLegacy ? parseState(legacySave) : initialState;
-      }
-      if (cancelled) return;
-      setData(loadedState);
-      localStorage.setItem(LOCAL_OWNER_KEY, user.id);
-      localStorage.setItem(`${STORAGE_KEY}:${user.id}`, JSON.stringify(loadedState));
-      setLoadedUserId(user.id);
-    })();
-    return () => { cancelled = true; };
-  }, [authReady, user?.id]);
-
-  useEffect(() => {
-    if (!user || loadedUserId !== user.id) return;
-    const serialized = JSON.stringify(data);
-    localStorage.setItem(`${STORAGE_KEY}:${user.id}`, serialized);
-    localStorage.setItem(LOCAL_OWNER_KEY, user.id);
-    const timeout = window.setTimeout(async () => {
-      const { error } = await supabase.from("game_saves").upsert({
-        user_id: user.id,
-        game_state: data,
-        updated_at: new Date().toISOString()
-      }, { onConflict: "user_id" });
-      if (error) setSyncError(`Cloud save failed: ${error.message}`);
-      else setSyncError("");
-    }, 600);
-    return () => window.clearTimeout(timeout);
-  }, [data, user?.id, loadedUserId]);
-
-  async function submitAuth(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setAuthBusy(true);
-    setAuthError("");
-    setAuthMessage("");
-    try {
-      if (authMode === "signup") {
-        const { data: result, error } = await supabase.auth.signUp({ email: authEmail.trim(), password: authPassword });
-        if (error) throw error;
-        if (!result.session) setAuthMessage("Account created. Check your email to confirm your account, then log in.");
-        else setAuthMessage("Account created successfully.");
-      } else {
-        const { error } = await supabase.auth.signInWithPassword({ email: authEmail.trim(), password: authPassword });
-        if (error) throw error;
-      }
-    } catch (error) {
-      setAuthError(error instanceof Error ? error.message : "Authentication failed. Please try again.");
-    } finally {
-      setAuthBusy(false);
-    }
-  }
-
-  async function signOut() {
-    await supabase.auth.signOut();
-    setLoadedUserId(null);
-    setScreen("home");
-  }
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  }, [data]);
 
   const quests = data.quests;
   const inPool = (pool: Pool) => quests.filter(q => q.pool === pool);
@@ -276,7 +122,7 @@ export default function App() {
       while (changed) {
         changed = false;
         prev.quests.forEach(q => {
-          if (q.dependsOn && removeIds.has(q.dependsOn) && !removeIds.has(q.id)) {
+          if (((q.dependsOn && removeIds.has(q.dependsOn)) || (q.projectId && removeIds.has(q.projectId))) && !removeIds.has(q.id)) {
             removeIds.add(q.id);
             changed = true;
           }
@@ -381,14 +227,14 @@ export default function App() {
 
   function addNextAction() {
     if (!projectBeingPlanned || !nextActionText.trim()) return;
-    addQuest(nextActionText, "active", { projectId: projectBeingPlanned.id });
+    addQuest(`[${projectBeingPlanned.title}] ${nextActionText}`, "active", { projectId: projectBeingPlanned.id });
     setNextActionText("");
   }
 
   function addFollowUp(parentId: string) {
     const text = (followUpInputs[parentId] ?? "").trim();
     if (!projectBeingPlanned || !text) return;
-    addQuest(text, "locked", { dependsOn: parentId, projectId: projectBeingPlanned.id });
+    addQuest(`[${projectBeingPlanned.title}] ${text}`, "locked", { dependsOn: parentId, projectId: projectBeingPlanned.id });
     setFollowUpInputs(prev => ({ ...prev, [parentId]: "" }));
   }
 
@@ -406,8 +252,7 @@ export default function App() {
       {depth > 0 && <span className="plan-tree-arrow" aria-hidden="true">↳</span>}
       <div className={`mini-quest ${quest.pool === "locked" ? "locked-mini" : ""}`}>
         <span className={`quest-dot ${quest.pool === "locked" ? "muted-dot" : "blue-dot"}`} />
-        <span>{quest.title}</span>
-        <button className="mini-delete" onClick={() => deleteQuest(quest.id)} aria-label={`Delete ${quest.title}`}><X size={14} /></button>
+        <QuestTitle quest={quest} onUpdate={updateQuest} onDelete={deleteQuest} />
       </div>
       <div className="followup-inline-form">
         <input value={followUpInputs[quest.id] ?? ""} onChange={e => setFollowUpInputs(prev => ({ ...prev, [quest.id]: e.target.value }))} onKeyDown={e => { if (e.key === "Enter") addFollowUp(quest.id); }} placeholder="Add follow-up quest…" aria-label={`Add follow-up to ${quest.title}`} />
@@ -430,12 +275,6 @@ export default function App() {
     setSlotIndex(null);
   }
 
-  if (!authReady) return <div className="auth-page"><div className="auth-card"><div className="auth-logo"><Compass size={26} /></div><h1>DreamQuests</h1><p className="auth-intro">Connecting to your account…</p></div></div>;
-
-  if (!user) return <AuthScreen mode={authMode} setMode={mode => { setAuthMode(mode); setAuthError(""); setAuthMessage(""); }} email={authEmail} setEmail={setAuthEmail} password={authPassword} setPassword={setAuthPassword} busy={authBusy} error={authError} message={authMessage} onSubmit={submitAuth} />;
-
-  if (loadedUserId !== user.id) return <div className="auth-page"><div className="auth-card"><div className="auth-logo"><Compass size={26} /></div><h1>DreamQuests</h1><p className="auth-intro">{gameLoadError || "Loading your saved quests…"}</p>{gameLoadError && <button className="primary-button auth-submit" onClick={() => window.location.reload()}>Try again</button>}<button className="auth-text-button" onClick={signOut}>Log out</button></div></div>;
-
   return (
     <div className="app-shell">
       <div className="phone-frame">
@@ -444,13 +283,13 @@ export default function App() {
             <header className="home-header">
               <div className="brand-mark"><Compass size={23} /></div>
               <div className="brand-copy"><h1>DreamQuests<span>.</span></h1></div>
-              <div className="home-header-actions"><div className="token-pill"><CircleDollarSign size={17} /><strong>{data.tokens}</strong></div><button className="signout-button" onClick={signOut} aria-label="Log out" title={user.email ?? "Log out"}><LogOut size={17} /></button></div>
+              <div className="token-pill"><CircleDollarSign size={17} /><strong>{data.tokens}</strong></div>
             </header>
             <div className="section-heading"><div><h2>Your quest board</h2></div></div>
             <div className="home-grid">
               {navItems.map(item => {
                 const Icon = item.icon;
-                const count = item.id === "capture" ? inbox.length : item.id === "sort" ? inbox.length + projects.length : item.id === "plan" ? projects.length : item.id === "quests" ? active.length : item.id === "logbook" ? ongoing.length + rewardOngoing.length : rewardPool.length;
+                const count = item.id === "capture" ? inbox.length : item.id === "plan" ? projects.length : item.id === "quests" ? active.length : item.id === "logbook" ? ongoing.length + rewardOngoing.length : rewardPool.length;
                 return <button className="home-tile" key={item.id} onClick={() => setScreen(item.id)}>
                   <span className={`tile-icon-wrap ${item.color}`}><span className="tile-icon"><Icon size={23} strokeWidth={1.9} /></span>{count > 0 && <span className="notification-badge">{count}</span>}</span>
                   <span className="tile-label">{item.label}</span>
@@ -473,14 +312,8 @@ export default function App() {
               </Card>
               {notice && <div className="inline-notice">{notice}</div>}
               <div className="section-heading compact"><div><span className="eyebrow">YOUR INBOX</span><h2>Waiting to be sorted <span className="count-bubble">{inbox.length}</span></h2></div></div>
-              {inbox.length === 0 ? <EmptyState title="A clear head feels good" detail="Captured thoughts will show up here." /> : <div className="quest-stack">{inbox.map(q => <QuestCard key={q.id} quest={q} onDelete={deleteQuest} />)}</div>}
-            </section>}
-
-            {screen === "sort" && <section className="content-section">
-              <div className="section-heading compact"><div><span className="eyebrow">STEP 1 OF 2</span><h2>Unsorted thoughts <span className="count-bubble">{inbox.length}</span></h2></div><span className="small-muted">Drag a card ↓</span></div>
-              {inbox.length === 0 ? <EmptyState title="Inbox zero!" detail="Capture something new or enjoy the breathing room." /> :
-                <div className="quest-stack">{inbox.map(q => <div key={q.id} draggable onClick={() => setDraggedId(q.id)} onDragStart={() => setDraggedId(q.id)} onDragEnd={() => setDraggedId(null)} className={`quest-card draggable ${draggedId === q.id ? "dragging" : ""}`}><span className="drag-grip">⠿</span><span className="quest-title">{q.title}</span><button className="icon-button danger" onClick={() => deleteQuest(q.id)} aria-label="Delete quest"><Trash2 size={16} /></button></div>)}</div>}
-              <div className="section-heading compact bucket-title"><div><span className="eyebrow">STEP 2 OF 2</span><h2>Drop into a bucket</h2></div></div>
+              {inbox.length === 0 ? <EmptyState title="A clear head feels good" detail="Captured thoughts will show up here." /> : <div className="quest-stack">{inbox.map(q => <div key={q.id} draggable onClick={() => setDraggedId(q.id)} onDragStart={() => setDraggedId(q.id)} onDragEnd={() => setDraggedId(null)} className={`quest-card draggable ${draggedId === q.id ? "dragging" : ""}`}><span className="drag-grip">⠿</span><QuestTitle quest={q} onUpdate={updateQuest} onDelete={deleteQuest} /><span className="drag-hint">Drag or tap a bucket</span></div>)}</div>}
+              <div className="section-heading compact bucket-title"><div><h2>Sort into a bucket</h2></div></div>
               <div className="bucket-grid">
                 <DropBucket title="Action" description="Do it soon" color="blue" icon={<ListTodo size={21} />} count={active.length} onDrop={() => handleDrop("active")} onClick={() => draggedId && handleDrop("active")} />
                 <DropBucket title="Project" description="Needs a plan" color="mint" icon={<Compass size={21} />} count={projects.length} onDrop={() => handleDrop("projects")} onClick={() => draggedId && handleDrop("projects")} />
@@ -492,7 +325,7 @@ export default function App() {
 
             {screen === "plan" && <section className="content-section">
               <div className="section-heading compact"><div><span className="eyebrow">PROJECT WORKSHOP</span><h2>Projects to plan <span className="count-bubble">{projects.length}</span></h2></div></div>
-              {projects.length === 0 ? <EmptyState title="Nothing on the drawing board" detail="Sort an item into Project to plan it here." /> : <div className="quest-stack">{projects.map(q => <button className="project-card" key={q.id} onClick={() => openPlan(q)}><span className="project-icon"><Compass size={19} /></span><span className="project-copy"><strong>{q.title}</strong><small>{quests.filter(x => x.projectId === q.id && x.pool === "active").length} next actions · {quests.filter(x => x.projectId === q.id && x.pool === "locked").length} locked follow-ups</small></span><span className="chevron">›</span></button>)}</div>}
+              {projects.length === 0 ? <EmptyState title="Nothing on the drawing board" detail="Sort an item into Project to plan it here." /> : <div className="quest-stack">{projects.map(q => <div className="project-card" key={q.id}><span className="project-icon"><Compass size={19} /></span><span className="project-copy"><QuestTitle quest={q} onUpdate={updateQuest} onDelete={deleteQuest} /><small>{quests.filter(x => x.projectId === q.id && x.pool === "active").length} next actions · {quests.filter(x => x.projectId === q.id && x.pool === "locked").length} locked follow-ups</small><button className="project-open-button" onClick={() => openPlan(q)}>Open plan <span>›</span></button></span></div>)}</div>}
             </section>}
 
             {screen === "quests" && <section className="content-section">
@@ -501,7 +334,7 @@ export default function App() {
               {active.length === 0 ? <EmptyState title="No active quests yet" detail="Capture and sort a thought, or plan a project." /> : <div className="quest-stack">{active.map(q => {
                 const children = locked.filter(l => l.dependsOn === q.id);
                 const isExpanded = expanded.includes(q.id);
-                return <div className="quest-group" key={q.id}><div className="quest-card"><span className="quest-dot blue-dot" /><span className="quest-title">{q.title}</span>{children.length > 0 && <button className={`expand-button ${isExpanded ? "open" : ""}`} onClick={() => setExpanded(prev => isExpanded ? prev.filter(id => id !== q.id) : [...prev, q.id])} aria-label="Show follow-up quests"><ChevronDown size={18} /></button>}<button className="add-button" onClick={() => addToLogbook(q)} disabled={ordinarySlotsLeft === 0} title="Add to logbook"><Plus size={18} /></button></div>{isExpanded && children.map(child => <div className="locked-card" key={child.id}><span className="lock-symbol">⌑</span><span>{child.title}</span><small>Locked</small></div>)}</div>;
+                return <div className="quest-group" key={q.id}><div className="quest-card"><span className="quest-dot blue-dot" /><QuestTitle quest={q} onUpdate={updateQuest} onDelete={deleteQuest} />{children.length > 0 && <button className={`expand-button ${isExpanded ? "open" : ""}`} onClick={() => setExpanded(prev => isExpanded ? prev.filter(id => id !== q.id) : [...prev, q.id])} aria-label="Show follow-up quests"><ChevronDown size={18} /></button>}<button className="add-button" onClick={() => addToLogbook(q)} disabled={ordinarySlotsLeft === 0} title="Add to logbook"><Plus size={18} /></button></div>{isExpanded && children.map(child => <div className="locked-card" key={child.id}><span className="lock-symbol">⌑</span><QuestTitle quest={child} onUpdate={updateQuest} onDelete={deleteQuest} /><small>Locked</small></div>)}</div>;
               })}</div>}
               {notice && <div className="inline-notice">{notice}</div>}
             </section>}
@@ -513,29 +346,28 @@ export default function App() {
                 const children = locked.filter(child => child.dependsOn === q.id);
                 const completing = completingIds.includes(q.id);
                 return <div className={`logbook-quest-group ${completing ? "is-completing" : ""}`} key={q.id}>
-                  <div className={`logbook-quest ${completing ? "quest-completing" : ""}`}><span className="completion-ring" /><span className="quest-title">{q.title}</span><button className="complete-button" onClick={() => completeQuest(q)} disabled={completing} aria-label={`Complete ${q.title}`}><Check size={18} /><span className="completion-stars" aria-hidden="true">✦ ✧</span></button></div>
+                  <div className={`logbook-quest ${completing ? "quest-completing" : ""}`}><QuestTitle quest={q} onUpdate={updateQuest} onDelete={deleteQuest} onMove={() => updateQuest(q.id, { pool: "active" })} canMove /><button className="complete-button" onClick={() => completeQuest(q)} disabled={completing} aria-label={`Complete ${q.title}`}><Check size={18} /><span className="completion-stars" aria-hidden="true">✦ ✧</span></button></div>
                   {children.map(child => <div className={`logbook-followup ${completing ? "followup-promoting" : ""}`} key={child.id}><span>↳</span>{child.title}</div>)}
                 </div>;
               })}</div>}
               {ordinarySlotsLeft > 0 && <div className="empty-slots"><div className="slots-label">EMPTY SLOTS <span>{ordinarySlotsLeft} available</span></div><div className="slot-grid">{Array.from({ length: ordinarySlotsLeft }, (_, i) => <button className="empty-slot" key={i} onClick={() => selectSlot(i)}><Plus size={17} /><span>Choose a quest</span></button>)}</div></div>}
-              {rewardOngoing.length > 0 && <><div className="section-heading compact reward-heading"><div><span className="eyebrow">BONUS ADVENTURES</span><h2>Reward quests <span className="count-bubble gold-count">{rewardOngoing.length}</span></h2></div></div><div className="quest-stack">{rewardOngoing.map(q => { const completing = completingIds.includes(q.id); return <div className={`logbook-quest reward-quest ${completing ? "quest-completing" : ""}`} key={q.id}><span className="completion-ring gold-ring" /><span className="quest-title">{q.title}</span><span className="reward-tag">REWARD</span><button className="complete-button reward-complete" onClick={() => completeReward(q)} disabled={completing} aria-label={`Complete reward ${q.title}`}><Check size={18} /><span className="completion-stars" aria-hidden="true">✦ ✧</span></button></div>; })}</div></>}
+              {rewardOngoing.length > 0 && <><div className="section-heading compact reward-heading"><div><span className="eyebrow">BONUS ADVENTURES</span><h2>Reward quests <span className="count-bubble gold-count">{rewardOngoing.length}</span></h2></div></div><div className="quest-stack">{rewardOngoing.map(q => { const completing = completingIds.includes(q.id); return <div className={`logbook-quest reward-quest ${completing ? "quest-completing" : ""}`} key={q.id}><QuestTitle quest={q} onUpdate={updateQuest} onDelete={deleteQuest} onMove={() => updateQuest(q.id, { pool: "rewards", isReward: false })} canMove /><span className="reward-tag">REWARD</span><button className="complete-button reward-complete" onClick={() => completeReward(q)} disabled={completing} aria-label={`Complete reward ${q.title}`}><Check size={18} /><span className="completion-stars" aria-hidden="true">✦ ✧</span></button></div>; })}</div></>}
               {notice && <div className="inline-notice">{notice}</div>}
             </section>}
 
             {screen === "rewards" && <section className="content-section">
               <Card className="token-banner"><div className="token-coin"><CircleDollarSign size={30} /></div><div><span className="eyebrow light">YOUR TOKEN WALLET</span><strong>{data.tokens} <small>tokens</small></strong><p>Every completed quest earns 1 token.</p></div><div className="banner-sparkle"><Sparkles size={24} /></div></Card>
               <div className="section-heading compact"><div><span className="eyebrow">SAVE UP & UNLOCK</span><h2>Reward quests <span className="count-bubble gold-count">{rewardPool.length}</span></h2></div></div>
-              {rewardPool.length === 0 ? <EmptyState title="Dream up a reward" detail="Capture something you'd love to do, then sort it into Reward." /> : <div className="quest-stack">{rewardPool.map(q => <div className="reward-store-card" key={q.id}><div className="reward-store-icon"><Gift size={21} /></div><div className="reward-store-copy"><strong>{q.title}</strong><span>Unlock for 50 tokens</span></div><button className="unlock-button" onClick={() => unlockReward(q)} disabled={data.tokens < 50}><CircleDollarSign size={15} /> 50</button></div>)}</div>}
+              {rewardPool.length === 0 ? <EmptyState title="Dream up a reward" detail="Capture something you'd love to do, then sort it into Reward." /> : <div className="quest-stack">{rewardPool.map(q => <div className="reward-store-card" key={q.id}><div className="reward-store-icon"><Gift size={21} /></div><div className="reward-store-copy"><QuestTitle quest={q} onUpdate={updateQuest} onDelete={deleteQuest} /><span>Unlock for 50 tokens</span></div><button className="unlock-button" onClick={() => unlockReward(q)} disabled={data.tokens < 50}><CircleDollarSign size={15} /> 50</button></div>)}</div>}
               {notice && <div className="inline-notice">{notice}</div>}
             </section>}
-            {syncError && <div className="sync-error" role="status">{syncError}</div>}
             <footer className="screen-footer"><span>DREAMQUESTS</span><span>Made for your next small step ✦</span></footer>
           </main>
         )}
         <nav className="bottom-nav" aria-label="Main navigation">
           <button className={screen === "home" ? "selected" : ""} onClick={() => setScreen("home")}><Home size={19} /><span>Home</span></button>
-          <button className={screen === "capture" ? "selected" : ""} onClick={() => setScreen("capture")}><Sparkles size={19} /><span>Capture</span></button>
-          <button className={screen === "sort" ? "selected" : ""} onClick={() => setScreen("sort")}><Layers3 size={19} /><span>Sort</span>{inbox.length + projects.length > 0 && <span className="nav-badge">{inbox.length + projects.length}</span>}</button>
+          <button className={screen === "capture" ? "selected" : ""} onClick={() => setScreen("capture")}><Sparkles size={19} /><span>Capture & Sort</span>{inbox.length > 0 && <span className="nav-badge">{inbox.length}</span>}</button>
+          <button className={screen === "plan" ? "selected" : ""} onClick={() => setScreen("plan")}><Compass size={19} /><span>Plan</span>{projects.length > 0 && <span className="nav-badge">{projects.length}</span>}</button>
           <button className={screen === "logbook" ? "selected" : ""} onClick={() => setScreen("logbook")}><BookOpen size={19} /><span>Logbook</span></button>
         </nav>
 
@@ -561,8 +393,15 @@ export default function App() {
   );
 }
 
-function QuestCard({ quest, onDelete }: { quest: Quest; onDelete: (id: string) => void }) {
-  return <div className="quest-card"><span className="quest-dot lavender-dot" /><span className="quest-title">{quest.title}</span><button className="icon-button danger" onClick={() => onDelete(quest.id)} aria-label="Delete quest"><Trash2 size={16} /></button></div>;
+function QuestTitle({ quest, onUpdate, onDelete, onMove, canMove = false }: { quest: Quest; onUpdate: (id: string, updates: Partial<Quest>) => void; onDelete: (id: string) => void; onMove?: () => void; canMove?: boolean }) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(quest.title);
+  function save() { const title = draft.trim(); if (title) onUpdate(quest.id, { title }); else setDraft(quest.title); setEditing(false); }
+  return <div className="quest-title-tools" onClick={e => e.stopPropagation()}>
+    {editing ? <input className="quest-edit-input" autoFocus value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={e => { if (e.key === "Enter") save(); if (e.key === "Escape") { setDraft(quest.title); setEditing(false); } }} aria-label="Edit quest title" /> : <span className="quest-title">{quest.title}</span>}
+    {editing ? <button className="icon-button" onClick={save} aria-label="Save quest title"><Check size={16} /></button> : <div className="quest-actions-wrap"><button className="icon-button quest-menu-trigger" onClick={() => setMenuOpen(v => !v)} aria-label={`More options for ${quest.title}`}><MoreVertical size={18} /></button>{menuOpen && <div className="quest-actions-menu"><button onClick={() => { setDraft(quest.title); setEditing(true); setMenuOpen(false); }}>Edit title</button>{canMove && onMove && <button onClick={() => { onMove(); setMenuOpen(false); }}><ArrowDownToLine size={14} /> Move to pool</button>}<button className="delete-action" onClick={() => { onDelete(quest.id); setMenuOpen(false); }}><Trash2 size={14} /> Delete</button></div>}</div>}
+  </div>;
 }
 
 function DropBucket({ title, description, color, icon, count, onDrop, onClick }: { title: string; description: string; color: string; icon: React.ReactNode; count: number; onDrop: () => void; onClick: () => void }) {
